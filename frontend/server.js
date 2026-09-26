@@ -2,29 +2,38 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 10000;
 
-function resolveDistDir() {
+function resolveFrontendDir() {
   const candidates = [
-    path.join(__dirname, 'dist'),
-    path.join(__dirname, '..', 'frontend', 'dist'),
-    path.join(process.cwd(), 'frontend', 'dist'),
-    path.join(process.cwd(), 'dist'),
+    __dirname,
+    path.join(process.cwd(), 'frontend'),
+    process.cwd(),
   ];
-  for (const cand of candidates) {
-    if (fs.existsSync(cand) && fs.existsSync(path.join(cand, 'index.html'))) {
-      console.log(`[NexVault] Serving dist directory from: ${cand}`);
-      return cand;
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'package.json'))) {
+      return dir;
     }
   }
-  console.warn(`[NexVault] Warning: dist directory not found in candidates, defaulting to: ${candidates[0]}`);
-  return candidates[0];
+  return __dirname;
 }
 
-const DIST_DIR = resolveDistDir();
+const FRONTEND_DIR = resolveFrontendDir();
+const DIST_DIR = path.join(FRONTEND_DIR, 'dist');
+
+// Auto-build fallback if dist/index.html does not exist on disk
+if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+  console.log('[NexVault] dist/index.html missing. Triggering auto-build...');
+  try {
+    execSync('npx vite build', { cwd: FRONTEND_DIR, stdio: 'inherit' });
+  } catch (err) {
+    console.error('[NexVault] Auto-build failed:', err.message);
+  }
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -40,7 +49,8 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
-  let filePath = path.join(DIST_DIR, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
+  let reqPath = req.url.split('?')[0];
+  let filePath = path.join(DIST_DIR, reqPath === '/' ? 'index.html' : reqPath);
 
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     filePath = path.join(DIST_DIR, 'index.html');
@@ -51,8 +61,8 @@ const server = http.createServer((req, res) => {
 
   fs.readFile(filePath, (err, content) => {
     if (err) {
-      res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end(`Server Error: ${err.code}\nPath: ${filePath}\nDIST_DIR: ${DIST_DIR}`);
+      res.writeHead(500, { 'Content-Type': 'text/html' });
+      res.end(`<h1>Server Error</h1><p>${err.message}</p>`);
     } else {
       res.writeHead(200, { 'Content-Type': contentType });
       res.end(content, 'utf-8');
@@ -62,4 +72,5 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`NexVault production server running on port ${PORT}`);
+  console.log(`Serving assets from: ${DIST_DIR}`);
 });
